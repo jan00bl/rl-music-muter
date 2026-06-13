@@ -5,8 +5,19 @@ import time
 from pystray import Icon as icon, Menu as menu, MenuItem as item
 from PIL import Image, ImageDraw
 import json
-from threading import Thread, current_thread
+from threading import Thread, current_thread, Timer
 import comtypes
+import os
+import sys
+from functools import partial
+
+def resource_path(relative_path):
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
 
 def create_image(width, height, color1, color2):
     # Generate an image and draw a pattern
@@ -33,21 +44,24 @@ def mute(isMuted, process):
             volume.SetMute(isMuted, None)
 
 def processEvents(event):
-    if event.find("ReplayPlaybackStart") != -1 or event.find("MatchEnded") != -1:
-        for programm in programmsToMute :
+    if event.find("GoalReplayStart") != -1 or event.find("MatchEnded") != -1:
+        for programm in settings["programmsToMute"] :
             mute(1, programm)
-    elif event.find("ReplayPlaybackEnd") != -1 or event.find("MatchDestroyed") != -1:
-        for programm in programmsToMute :
+    elif event.find("GoalReplayEnd") != -1 or event.find("MatchDestroyed") != -1 or event.find("PodiumEnd") != -1:
+        for programm in settings["programmsToMute"] :
             mute(0, programm)
 
-def on_click(_,item):
-    if item.text in programmsToMute:
-        programmsToMute.remove(item.text)
-    else:
-        programmsToMute.append(item.text)
-
+def set_setting(setting,_,item):
+    if setting == "muteEntirePostMatch":
+        settings["muteEntirePostMatch"] = not settings["muteEntirePostMatch"]
+    elif setting == "programmsToMute":
+        if item.text in settings["programmsToMute"]:
+            settings["programmsToMute"].remove(item.text)
+        else:
+            settings["programmsToMute"].append(item.text)
+    
     with open(saveFile, 'w') as f:
-        json.dump(programmsToMute, f)
+        json.dump(settings, f)
 
 def closeApp():
     global running
@@ -55,7 +69,8 @@ def closeApp():
 
 def updateTray():
     comtypes.CoInitialize()
-    tray = icon('test name', icon=create_image(64, 64, 'magenta', 'black'))
+    ic = Image.open(resource_path("Icon.ico"))
+    tray = icon('RL Music Muter', icon=ic)
     tray.run_detached()
     sessions = []
     t = current_thread()
@@ -92,13 +107,18 @@ def updateTray():
 
                 menuItems.append(item(
                     session.Process.name(),
-                    on_click,
-                    lambda item: item.text in programmsToMute
+                    partial(set_setting, "programmsToMute"),
+                    lambda item: item.text in settings["programmsToMute"]
                 ))
 
             tray.menu = menu(item(
                 'Programms to be muted',
                 menu(*menuItems)
+            ),
+            item(
+                'Mute entire post match',
+                partial(set_setting, "muteEntirePostMatch"),
+                checked=lambda item: settings["muteEntirePostMatch"]
             ),
             item(
                 'Close',
@@ -109,11 +129,12 @@ def updateTray():
 
 # Create a socket object
 s = socket.socket()
+s.settimeout(2)
 mutedProgramms = {}
 isConnected = False
-programmsToMute= ["Spotify.exe"]
+settings = {"programmsToMute": ["Spotify.exe"], "muteEntirePostMatch" : False}
 running = True
-saveFile= 'mutedProgramms.json'
+saveFile= 'settings.json'
 sessions = []
 
 # Define the port on which you want to connect
@@ -124,10 +145,10 @@ port = 49123
 with open(saveFile, "w+") as f:
     try:
         d = json.load(f)
-        if type(d) in (tuple, list):
-            programmsToMute = d
+        if type(d) in (dict):
+            settings = d
     except:
-        json.dump(programmsToMute, f)
+        json.dump(settings, f)
 
 
 t = Thread(target = updateTray)
@@ -143,12 +164,17 @@ while running:
             print("connected")
         except:
             print("cant connect")
-            time.sleep(5)
+            time.sleep(2)
             continue
     
     try:
         event = s.recv(4096).decode()
         processEvents(event)
+        if(not settings["muteEntirePostMatch"] and event.find("PodiumStart") != -1):
+            timer = Timer(5, processEvents, ["PodiumEnd"])
+            timer.start()
+    except socket.timeout:
+        None
     except ConnectionResetError:
         isConnected = False
         print("connection lost")

@@ -27,4 +27,4 @@ jobs:
       with:
           files: |
             dist/*.exe
-            LICENSE.txt
+            LICENSE

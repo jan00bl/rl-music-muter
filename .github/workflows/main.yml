@@ -3,6 +3,8 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write
 
 jobs:
   release:
@@ -24,5 +26,5 @@ jobs:
       uses: softprops/action-gh-release@v3
       with:
           files: |
-            *.exe
+            dist/*.exe
             LICENSE.txt

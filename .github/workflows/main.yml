@@ -5,7 +5,7 @@ on:
 
 
 jobs:
-  pre-release:
+  release:
     runs-on: windows-latest
     steps:
     - name: Checkout
@@ -19,11 +19,10 @@ jobs:
 
     - name: Build exe
       run: ./build_exe.bat
-      
-    - uses: "marvinpinto/action-automatic-releases@latest"
+
+    - name: Release
+      uses: softprops/action-gh-release@v3
       with:
-          repo_token: "${{ secrets.GITHUB_TOKEN }}"
-          prerelease: false
           files: |
-            LICENSE.txt
             *.exe
+            LICENSE.txt

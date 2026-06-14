@@ -9,7 +9,6 @@ from threading import Thread, current_thread, Timer
 import comtypes
 import os
 import sys
-from functools import partial
 
 def resource_path(relative_path):
     try:
@@ -32,45 +31,100 @@ def create_image(width, height, color1, color2):
 
     return image
 
-def mute(isMuted, process):
-    if process in mutedProgramms.keys() and mutedProgramms[process] == isMuted:
-        return
-    
-    mutedProgramms[process] = isMuted
-
+def get_volume(process):
     for session in AudioUtilities.GetAllSessions():
         volume = session.SimpleAudioVolume
         if session.Process and session.Process.name() == process:
-            volume.SetMute(isMuted, None)
+            return volume
+
+def mute(muteProcess, process):
+    if process in mutedProcesses.keys() and mutedProcesses[process] == muteProcess:
+        return
+    
+    mutedProcesses[process] = muteProcess
+
+    volume = get_volume(process)
+
+    if settings["muteMode"] == "hardcut":
+        volume.SetMute(muteProcess, None)
+        return
+    
+    if muteProcess:
+        processVolumes[process] = volume.GetMasterVolume()
+        muteThread = Thread(target = fade_out, args=[process,volume,0.5])
+        muteThread.start()
+    else:
+        volumeGoal = processVolumes[process]
+        muteThread = Thread(target = fade_in, args=[process,volume,0.5,volumeGoal])
+        muteThread.start()
+
+
+def fade_out(process, volume, duration):
+    currentVolume = volume.GetMasterVolume()
+    timeStep = duration / 100
+    volumeStep = currentVolume / 100
+    while currentVolume > 0 and mutedProcesses[process]:
+        currentVolume = max(0, currentVolume - volumeStep)
+        volume.SetMasterVolume(currentVolume, None)
+        time.sleep(timeStep)
+
+def fade_in(process, volume, duration, volumeGoal):
+    currentVolume = volume.GetMasterVolume()
+    timeStep = duration / 100
+    volumeStep = volumeGoal / 100
+    while currentVolume < volumeGoal and not mutedProcesses[process]:
+        currentVolume = min(volumeGoal, currentVolume + volumeStep)
+        volume.SetMasterVolume(currentVolume, None)
+        time.sleep(timeStep)
+
+
+def mute_all(isMuted):
+    for process in settings["processesToMute"] :
+        mute(isMuted, process)
 
 def processEvents(event):
     if event.find("GoalReplayStart") != -1 or event.find("MatchEnded") != -1:
-        for programm in settings["programmsToMute"] :
-            mute(1, programm)
+        mute_all(True)
     elif event.find("GoalReplayEnd") != -1 or event.find("MatchDestroyed") != -1 or event.find("PodiumEnd") != -1:
-        for programm in settings["programmsToMute"] :
-            mute(0, programm)
+        mute_all(False)
 
-def set_setting(setting,_,item):
+def set_setting(setting,value):
     if setting == "muteEntirePostMatch":
-        settings["muteEntirePostMatch"] = not settings["muteEntirePostMatch"]
-    elif setting == "programmsToMute":
-        if item.text in settings["programmsToMute"]:
-            settings["programmsToMute"].remove(item.text)
+        settings["muteEntirePostMatch"] = value
+    elif setting == "processesToMute":
+        if value in settings["processesToMute"]:
+            settings["processesToMute"].remove(value)
         else:
-            settings["programmsToMute"].append(item.text)
+            settings["processesToMute"].append(value)
+    elif setting == "muteMode":
+        settings["muteMode"] = value
     
     with open(saveFile, 'w') as f:
         json.dump(settings, f)
+
+def test_mute():
+    global testMute
+    testMute = not testMute
+    if testMute:
+        mute_all(True)
+    else:
+        mute_all(False)
 
 def closeApp():
     global running
     running = False
 
+def create_process_menu_item(processName):
+    return item(
+                    processName,
+                    lambda _: set_setting("processesToMute", processName),
+                    lambda _: processName in settings["processesToMute"]
+                )
+
 def updateTray():
     comtypes.CoInitialize()
     ic = Image.open(resource_path("Icon.ico"))
-    tray = icon('RL Music Muter', icon=ic)
+    tray = icon("RL Music Muter", icon=ic, title="RL Music Muter")
     tray.run_detached()
     sessions = []
     t = current_thread()
@@ -102,23 +156,38 @@ def updateTray():
             print("refreshing tray")
 
             for session in sessions:
-                if(not session.Process):
+                if(session.Process == None):
                     continue
-
-                menuItems.append(item(
-                    session.Process.name(),
-                    partial(set_setting, "programmsToMute"),
-                    lambda item: item.text in settings["programmsToMute"]
-                ))
+                menuItems.append(create_process_menu_item(session.Process.name()))
 
             tray.menu = menu(item(
-                'Programms to be muted',
+                'Processes to be muted',
                 menu(*menuItems)
             ),
             item(
+                'Mute mode',
+                menu(
+                    item(
+                        'Fade Out/In',
+                        lambda _: set_setting("muteMode", "fadeOut"),
+                        checked=lambda _: settings["muteMode"] == "fadeOut"
+                    ),
+                    item(
+                        'Hardcut',
+                        lambda _: set_setting("muteMode", "hardcut"),
+                        checked=lambda _: settings["muteMode"] == "hardcut"
+                    )
+                )
+            ),
+            item(
                 'Mute entire post match',
-                partial(set_setting, "muteEntirePostMatch"),
-                checked=lambda item: settings["muteEntirePostMatch"]
+                lambda _: set_setting("muteEntirePostMatch", not settings["muteEntirePostMatch"]),
+                checked=lambda _: settings["muteEntirePostMatch"]
+            ),
+            item(
+                'Test mute',
+                test_mute,
+                checked=lambda _: testMute
             ),
             item(
                 'Close',
@@ -130,25 +199,27 @@ def updateTray():
 # Create a socket object
 s = socket.socket()
 s.settimeout(2)
-mutedProgramms = {}
+mutedProcesses = {}
+processVolumes = {}
 isConnected = False
-settings = {"programmsToMute": ["Spotify.exe"], "muteEntirePostMatch" : False}
+settings = {"processesToMute": ["Spotify.exe"], "muteEntirePostMatch" : False, "muteMode": "fadeOut"}
 running = True
 saveFile= 'settings.json'
 sessions = []
+testMute = False
 
 # Define the port on which you want to connect
 port = 49123
 
-
-
-with open(saveFile, "w+") as f:
+with open(resource_path(saveFile), "a+") as file:
     try:
-        d = json.load(f)
-        if type(d) in (dict):
+        d = json.load(file)
+        if type(d) == dict:
             settings = d
     except:
-        json.dump(settings, f)
+        print("could not load settings, use default settings")
+        with open(resource_path(saveFile), "w") as writeFile:
+            json.dump(settings, writeFile)
 
 
 t = Thread(target = updateTray)

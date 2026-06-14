@@ -1,8 +1,11 @@
 on:
-  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
 
 jobs:
-  build:
+  pre-release:
     runs-on: windows-latest
     steps:
     - name: Checkout
@@ -16,8 +19,11 @@ jobs:
 
     - name: Build exe
       run: ./build_exe.bat
-
-    - uses: actions/upload-artifact@v7
+      
+    - uses: "marvinpinto/action-automatic-releases@latest"
       with:
-        name: RL Music Muter
-        path: D:\a\rl-music-muter\rl-music-muter\dist\RL Music Muter.exe
+          repo_token: "${{ secrets.GITHUB_TOKEN }}"
+          prerelease: false
+          files: |
+            LICENSE.txt
+            *.exe

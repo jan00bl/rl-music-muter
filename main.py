@@ -230,13 +230,13 @@ testMute = False
 port = 49123
 
 try:
-    with open(resource_path(saveFile), "r") as file:
+    with open(saveFile, "r") as file:
         d = json.load(file)
         if type(d) == dict:
             settings = d
 except:
     print("could not load settings, use default settings")
-    with open(resource_path(saveFile), "w") as writeFile:
+    with open(saveFile, "w") as writeFile:
         json.dump(settings, writeFile)
 
 

@@ -229,15 +229,15 @@ testMute = False
 # Define the port on which you want to connect
 port = 49123
 
-with open(resource_path(saveFile), "a+") as file:
-    try:
+try:
+    with open(resource_path(saveFile), "r") as file:
         d = json.load(file)
         if type(d) == dict:
             settings = d
-    except:
-        print("could not load settings, use default settings")
-        with open(resource_path(saveFile), "w") as writeFile:
-            json.dump(settings, writeFile)
+except:
+    print("could not load settings, use default settings")
+    with open(resource_path(saveFile), "w") as writeFile:
+        json.dump(settings, writeFile)
 
 
 t = Thread(target = updateTray)

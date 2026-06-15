@@ -3,12 +3,18 @@ import socket
 from pycaw.pycaw import AudioUtilities
 import time
 from pystray import Icon as icon, Menu as menu, MenuItem as item
-from PIL import Image, ImageDraw
+from PIL import Image
 import json
-from threading import Thread, current_thread, Timer
+from threading import Thread, current_thread, Timer, Lock
 import comtypes
 import os
 import sys
+
+class MuteState:
+    MUTED = 1
+    MUTING = 2
+    UNMUTED = 3
+    UNMUTING = 4
 
 def resource_path(relative_path):
     try:
@@ -18,19 +24,6 @@ def resource_path(relative_path):
 
     return os.path.join(base_path, relative_path)
 
-def create_image(width, height, color1, color2):
-    # Generate an image and draw a pattern
-    image = Image.new('RGB', (width, height), color1)
-    dc = ImageDraw.Draw(image)
-    dc.rectangle(
-        (width // 2, 0, width, height // 2),
-        fill=color2)
-    dc.rectangle(
-        (0, height // 2, width // 2, height),
-        fill=color2)
-
-    return image
-
 def get_volume(process):
     for session in AudioUtilities.GetAllSessions():
         volume = session.SimpleAudioVolume
@@ -38,44 +31,66 @@ def get_volume(process):
             return volume
 
 def mute(muteProcess, process):
-    if process in mutedProcesses.keys() and mutedProcesses[process] == muteProcess:
-        return
+    with mutedProcessesLock:
+        if not process in mutedProcesses.keys():
+            mutedProcesses[process] = MuteState.UNMUTED
+        if muteProcess and (mutedProcesses[process] == MuteState.MUTED or mutedProcesses[process] == MuteState.MUTING):
+            return
+        if not muteProcess and (mutedProcesses[process] == MuteState.UNMUTED or mutedProcesses[process] == MuteState.UNMUTING):
+            return
     
-    mutedProcesses[process] = muteProcess
+        prevMuteState = mutedProcesses[process]
 
-    volume = get_volume(process)
+        if muteProcess:
+            mutedProcesses[process] = MuteState.MUTING
+        else:
+            mutedProcesses[process] = MuteState.UNMUTING
 
-    if settings["muteMode"] == "hardcut":
-        volume.SetMute(muteProcess, None)
-        return
-    
-    if muteProcess:
-        processVolumes[process] = volume.GetMasterVolume()
-        muteThread = Thread(target = fade_out, args=[process,volume,0.5])
-        muteThread.start()
-    else:
-        volumeGoal = processVolumes[process]
-        muteThread = Thread(target = fade_in, args=[process,volume,0.5,volumeGoal])
-        muteThread.start()
+        volume = get_volume(process)
+
+        if settings["muteMode"] == "hardcut":
+            volume.SetMute(muteProcess, None)
+            if muteProcess:
+                mutedProcesses[process] = MuteState.MUTED
+            else:
+                muteProcess[process] = MuteState.UNMUTED
+            return
+
+        if muteProcess:
+            if prevMuteState == MuteState.UNMUTED:
+                processVolumes[process] = volume.GetMasterVolume()
+            muteThread = Thread(target = fade_out, args=[process,volume,0.5])
+            muteThread.start()
+        else:
+            volumeGoal = processVolumes[process]
+            muteThread = Thread(target = fade_in, args=[process,volume,0.5,volumeGoal])
+            muteThread.start()
 
 
 def fade_out(process, volume, duration):
     currentVolume = volume.GetMasterVolume()
     timeStep = duration / 100
     volumeStep = currentVolume / 100
-    while currentVolume > 0 and mutedProcesses[process]:
+    while currentVolume > 0 and mutedProcesses[process] == MuteState.MUTING:
         currentVolume = max(0, currentVolume - volumeStep)
         volume.SetMasterVolume(currentVolume, None)
         time.sleep(timeStep)
+    with mutedProcessesLock:
+        if mutedProcesses[process]  == MuteState.MUTING:
+            processVolumes[process] = MuteState.MUTED
+
 
 def fade_in(process, volume, duration, volumeGoal):
     currentVolume = volume.GetMasterVolume()
     timeStep = duration / 100
     volumeStep = volumeGoal / 100
-    while currentVolume < volumeGoal and not mutedProcesses[process]:
+    while currentVolume < volumeGoal and mutedProcesses[process]  == MuteState.UNMUTING:
         currentVolume = min(volumeGoal, currentVolume + volumeStep)
         volume.SetMasterVolume(currentVolume, None)
         time.sleep(timeStep)
+    with mutedProcessesLock:
+        if mutedProcesses[process]  == MuteState.UNMUTING:
+            processVolumes[process] = MuteState.UNMUTED
 
 
 def mute_all(isMuted):
@@ -84,8 +99,10 @@ def mute_all(isMuted):
 
 def processEvents(event):
     if event.find("GoalReplayStart") != -1 or event.find("MatchEnded") != -1:
+        print("GoalReplayStart | MatchEnded")
         mute_all(True)
     elif event.find("GoalReplayEnd") != -1 or event.find("MatchDestroyed") != -1 or event.find("PodiumEnd") != -1:
+        print("GoalReplayEnd | MatchDestroyed | PodiumEnd")
         mute_all(False)
 
 def set_setting(setting,value):
@@ -200,6 +217,7 @@ def updateTray():
 s = socket.socket()
 s.settimeout(2)
 mutedProcesses = {}
+mutedProcessesLock = Lock()
 processVolumes = {}
 isConnected = False
 settings = {"processesToMute": ["Spotify.exe"], "muteEntirePostMatch" : False, "muteMode": "fadeOut"}

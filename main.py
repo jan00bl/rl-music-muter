@@ -210,6 +210,7 @@ def updateTray():
                 'Close',
                 closeApp
             ))
+        time.sleep(2)
             
     tray.stop()
 

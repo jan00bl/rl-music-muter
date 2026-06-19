@@ -48,6 +48,10 @@ def mute(muteProcess, process):
 
         volume = get_volume(process)
 
+        if volume == None:
+            mutedProcesses[process] = MuteState.UNMUTED
+            return
+        
         if settings["muteMode"] == "hardcut":
             volume.SetMute(muteProcess, None)
             if muteProcess:
@@ -214,13 +218,40 @@ def updateTray():
             
     tray.stop()
 
+def main():
+    isConnected = False
+
+    t = current_thread()
+    while getattr(t, "do_run", True):
+        # receive data from the server and decoding to get the string.
+        if not isConnected:
+            try:
+                s.connect(('127.0.0.1', port))
+                isConnected = True
+                print("connected")
+            except:
+                print("cant connect")
+                time.sleep(2)
+                continue
+            
+        try:
+            event = s.recv(4096).decode()
+            processEvents(event)
+            if(not settings["muteEntirePostMatch"] and event.find("PodiumStart") != -1):
+                timer = Timer(5, processEvents, ["PodiumEnd"])
+                timer.start()
+        except socket.timeout:
+            None
+        except ConnectionResetError:
+            isConnected = False
+            print("connection lost")
+
 # Create a socket object
 s = socket.socket()
 s.settimeout(2)
 mutedProcesses = {}
 mutedProcessesLock = Lock()
 processVolumes = {}
-isConnected = False
 settings = {"processesToMute": ["Spotify.exe"], "muteEntirePostMatch" : False, "muteMode": "fadeOut"}
 running = True
 saveFile= 'settings.json'
@@ -241,35 +272,19 @@ except:
         json.dump(settings, writeFile)
 
 
-t = Thread(target = updateTray)
-t.start()
+thread_tray = Thread(target = updateTray, daemon= True)
+thread_tray.start()
 
-while running:
+thread_main = Thread(target= main, daemon= True)
+thread_main.start()
 
-    # receive data from the server and decoding to get the string.
-    if not isConnected:
-        try:
-            s.connect(('127.0.0.1', port))
-            isConnected = True
-            print("connected")
-        except:
-            print("cant connect")
-            time.sleep(2)
-            continue
-    
-    try:
-        event = s.recv(4096).decode()
-        processEvents(event)
-        if(not settings["muteEntirePostMatch"] and event.find("PodiumStart") != -1):
-            timer = Timer(5, processEvents, ["PodiumEnd"])
-            timer.start()
-    except socket.timeout:
-        None
-    except ConnectionResetError:
-        isConnected = False
-        print("connection lost")
+while True:
+    time.sleep(1)
+    if not running or not thread_tray.is_alive() or not thread_main.is_alive():
+        if thread_tray.is_alive():
+            thread_tray.do_run = False
+        if thread_main.is_alive():
+            thread_main.do_run = False
+        break
 
-
-# close the connection
-t.do_run = False
 s.close()
